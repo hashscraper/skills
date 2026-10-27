@@ -1,0 +1,15 @@
+{
+  "name": "hashscraper",
+  "displayName": "HashScraper",
+  "version": "0.4.0",
+  "description": "Collect public web data from Korean and global sites (Coupang, Naver, Instagram, YouTube, Olive Young, Musinsa, maps, reviews, communities) as clean rows, using HashScraper's ready-made bots.",
+  "author": {
+    "name": "HashScraper",
+    "url": "https://www.hashscraper.com"
+  },
+  "homepage": "https://www.hashscraper.com/?utm_source=github&utm_medium=skill&utm_campaign=skills_repo",
+  "repository": "https://github.com/hashscraper/skills",
+  "license": "MIT",
+  "keywords": ["web-data", "scraping", "ecommerce", "korea", "coupang", "naver", "reviews", "agent-skill"],
+  "skills": ["./hashscraper"]
+}

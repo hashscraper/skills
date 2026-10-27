@@ -1,0 +1,17 @@
+{
+  "name": "hashscraper",
+  "description": "HashScraper Agent Skills: collect public web data (Coupang, Naver, Instagram, YouTube, Olive Young, maps, reviews and more) from your AI agent, with free credits every day.",
+  "owner": {
+    "name": "HashScraper",
+    "url": "https://www.hashscraper.com"
+  },
+  "plugins": [
+    {
+      "name": "hashscraper",
+      "source": "./",
+      "description": "Ready-made data collection bots for 100+ Korean and global sites, run through the HashScraper API. Connect once in the browser; every day includes free credits.",
+      "category": "data",
+      "tags": ["web-data", "scraping", "ecommerce", "korea", "coupang", "naver", "reviews"]
+    }
+  ]
+}
