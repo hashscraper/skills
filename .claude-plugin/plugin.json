@@ -9,6 +9,10 @@
   },
   "homepage": "https://www.hashscraper.com/?utm_source=github&utm_medium=skill&utm_campaign=skills_repo",
   "repository": "https://github.com/hashscraper/skills",
+  "documentationUrl": "https://github.com/hashscraper/skills#readme",
+  "supportUrl": "https://github.com/hashscraper/skills/issues",
+  "privacyPolicyUrl": "https://www.hashscraper.com/privacy",
+  "termsOfServiceUrl": "https://www.hashscraper.com/terms",
   "license": "MIT",
   "keywords": ["web-data", "scraping", "ecommerce", "korea", "coupang", "naver", "reviews", "agent-skill"],
   "skills": ["./hashscraper"]
