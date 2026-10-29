@@ -7,6 +7,11 @@
   python3 hashscraper.py run DemoCoupangDetailWorker --input param1="https://www.coupang.com/vp/products/..."
   python3 hashscraper.py run DynNaverBlogWorker --input param1="성수동 카페" --input param5=50 --csv out.csv
   python3 hashscraper.py fetch 270261461                     # rows of an earlier run (waits while it is still collecting)
+  python3 hashscraper.py coupang-categories                  # Coupang categories with a ready daily top 30
+  python3 hashscraper.py coupang-top 커피믹스 --csv top30.csv  # top 30 of a category (with detail columns), 300 credits
+  python3 hashscraper.py request category <URL|ID> [--note ...]   # ask HashScraper to add a Coupang category (free)
+  python3 hashscraper.py request site <URL> --name <name> --note <data you want>   # ask for a new shopping site (free)
+  python3 hashscraper.py requests                            # status of my requests
 
 Runs use only the daily free credits. Add --use-credits to continue with your own credits when they run out.
 The key from `login` is saved in ~/.config/hashscraper/credentials (owner-only). HASHSCRAPER_API_KEY, if set, is used first.
@@ -25,7 +30,7 @@ import urllib.request
 import uuid
 import webbrowser
 
-VERSION = "0.4.0"
+VERSION = "0.7.0"
 CLIENT = f"agent-skill/{VERSION}"
 BASE = os.environ.get("HASHSCRAPER_BASE_URL", "https://www.hashscraper.com/v5/api").rstrip("/")
 SITE = "https://www.hashscraper.com"
@@ -41,6 +46,9 @@ GET_RETRIES = 3
 CREDENTIALS_PATH = os.path.join(os.path.expanduser("~"), ".config", "hashscraper", "credentials")
 PENDING_PATH = os.path.join(os.path.expanduser("~"), ".config", "hashscraper", "login_pending")  # login --start -> --wait
 LOGIN_HINT = "Run `python3 scripts/hashscraper.py login` to connect your HashScraper account in the browser"
+HELP_EMAIL = "help@hashscraper.com"
+HELP_HINT = (f"For data this skill cannot collect, email {HELP_EMAIL} with the site, the data you need, "
+             "how much and how often.")
 
 
 class ApiError(Exception):
@@ -105,7 +113,7 @@ def remove_quietly(path):
         pass
 
 
-def call(method, path, key, body=None, query=None, idempotency_key=None, use_credits=False):
+def call(method, path, key, body=None, query=None, idempotency_key=None, use_credits=False, extra_headers=None):
     url = BASE + path
     if query:
         url += "?" + urllib.parse.urlencode(query)
@@ -114,6 +122,7 @@ def call(method, path, key, body=None, query=None, idempotency_key=None, use_cre
         headers["Authorization"] = f"Bearer {key}"
     if use_credits:
         headers["X-HashScraper-Use-Credits"] = "true"
+    headers.update(extra_headers or {})
     data = None
     if body is not None:
         data = json.dumps(body).encode("utf-8")
@@ -171,7 +180,16 @@ def explain(error):
         else:
             lines.append(f"The saved key was turned off, deleted or expired. {LOGIN_HINT} again.")
     elif error.code == "RATE_LIMITED":
-        lines.append("Too many requests. Wait a minute before trying again.")
+        lines.append("Too many requests (or 5 data requests today). Wait a while — data requests reset at midnight KST "
+                     f"— or email {HELP_EMAIL}.")
+    elif error.code == "CATEGORY_NOT_AVAILABLE":
+        if details.get("available"):
+            lines.append("Available categories: " + ", ".join(details["available"])
+                         + " (see: python3 scripts/hashscraper.py coupang-categories)")
+        lines.append("To ask for another category: python3 scripts/hashscraper.py request category <URL or id> "
+                     f"(urgent or complex: email {HELP_EMAIL}).")
+    elif error.code == "DATA_NOT_READY":
+        lines.append("No credits were used. The daily snapshot is not finished yet — try again later.")
     elif details:
         lines.append(json.dumps(details, ensure_ascii=False))
     print("\n".join(lines), file=sys.stderr)
@@ -413,15 +431,19 @@ def cmd_run(args):
 
         bot_id = find_bot(key, args.worker) or (import_bot(key, args.worker) if entry else None)
         if not bot_id:
-            sys.exit(f"Your account has no bot for {args.worker}. Add it from the bot catalog ({BOT_CATALOG}), then run again.")
+            sys.exit(f"Your account has no bot for {args.worker}. Add it from the bot catalog ({BOT_CATALOG}), then run again. "
+                     + HELP_HINT)
 
         started = call("POST", f"/bots/{bot_id}/collections", key,
                        body={"inputs": inputs, "save_to_settings": False},
-                       idempotency_key=str(uuid.uuid4()), use_credits=args.use_credits)
+                       idempotency_key=str(uuid.uuid4()), use_credits=args.use_credits,
+                       extra_headers=accept_terms_headers(args))
         dataset_id = started["data"]["id"]
         print(f"collecting with {args.worker} (dataset {dataset_id})...", file=sys.stderr)
         return finish(key, dataset_id, args)
     except ApiError as e:
+        if e.code == "TERMS_ACCEPTANCE_REQUIRED":
+            return ask_terms(e.details.get("terms") or {})
         return explain(e)
 
 
@@ -453,16 +475,7 @@ def finish(key, dataset_id, args):
     rows = fetch_rows(key, dataset_id)
     after = (call("GET", "/me", key)["data"].get("daily_free") or {})
 
-    if args.csv:
-        columns = list(dict.fromkeys(k for row in rows for k in row))
-        with open(args.csv, "w", newline="", encoding="utf-8-sig") as handle:
-            writer = csv.DictWriter(handle, fieldnames=columns)
-            writer.writeheader()
-            writer.writerows(rows)
-        print(f"{len(rows)} rows -> {args.csv}", file=sys.stderr)
-    else:
-        for row in rows:
-            print(json.dumps(row, ensure_ascii=False))
+    write_rows(rows, args.csv)
     summary = f"status {dataset['status']} · {len(rows)} rows · own credits used so far {dataset.get('credits_used', 0)} (updates a few minutes later)"
     if after:
         summary += f" · daily free left {after.get('remaining')}"
@@ -471,6 +484,178 @@ def finish(key, dataset_id, args):
     print(summary, file=sys.stderr)
     print(FOOTER, file=sys.stderr)
     return 0
+
+
+def write_rows(rows, csv_path):
+    """Rows as JSON lines on stdout, or a CSV file (UTF-8 with BOM so Excel reads Korean)."""
+    if csv_path:
+        columns = list(dict.fromkeys(k for row in rows for k in row))
+        with open(csv_path, "w", newline="", encoding="utf-8-sig") as handle:
+            writer = csv.DictWriter(handle, fieldnames=columns)
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"{len(rows)} rows -> {csv_path}", file=sys.stderr)
+    else:
+        for row in rows:
+            print(json.dumps(row, ensure_ascii=False))
+
+
+def print_terms(terms):
+    if terms:
+        print(f"Terms: {terms.get('text_en')} {terms.get('text')} {terms.get('url')}", file=sys.stderr)
+
+
+def accept_terms_headers(args):
+    """The exact terms version the user was shown and agreed to — the server ignores any other version and asks again."""
+    return {"X-HashScraper-Accept-Terms": args.accept_terms} if args.accept_terms else None
+
+
+def ask_terms(terms):
+    """The first command that uses credits (run, coupang-top) needs the user's agreement to the data terms, once per account.
+    Nothing was collected or charged. Exit code 3."""
+    print("Before the first command that uses credits, the user must agree to the HashScraper data terms "
+          "(nothing was collected or charged):\n"
+          f"  {terms.get('text_en')}\n  {terms.get('text')}\n  {terms.get('url')} (version {terms.get('version')})\n"
+          f"Show these terms to the user. Only after the user clearly agrees, run the same command again with "
+          f"--accept-terms {terms.get('version')}. Never agree for the user.", file=sys.stderr)
+    return 3
+
+
+def cmd_coupang_categories(args):
+    """Coupang categories whose daily top 30 (with detail columns) is ready. Listing is free."""
+    key = api_key()
+    try:
+        page = call("GET", "/coupang/categories", key)
+    except ApiError as e:
+        return explain(e)
+    categories = page.get("data", [])
+    if args.json:
+        print(json.dumps(categories, ensure_ascii=False, indent=2))
+    else:
+        for item in categories:
+            print(f"{item['category_id']}  {item['name']}  latest {item.get('latest_date') or 'not ready'}  "
+                  f"{item.get('price_credits')} credits per fetch")
+    print(f"{len(categories)} categories. Not in the list? python3 scripts/hashscraper.py request category <URL or id> "
+          f"(free). Urgent or complex: email {HELP_EMAIL}.", file=sys.stderr)
+    print_terms(page.get("terms"))
+    return 0
+
+
+def resolve_category(key, wanted, categories=None):
+    """A category id as is, or a name looked up in coupang-categories (one match only)."""
+    text = wanted.strip()
+    if text.isdigit():
+        return text
+    if categories is None:
+        categories = call("GET", "/coupang/categories", key).get("data", [])
+    needle = text.casefold()
+    exact = [c for c in categories if c["name"].casefold() == needle]
+    found = exact or [c for c in categories if needle in c["name"].casefold()]
+    if len(found) == 1:
+        return found[0]["category_id"]
+    if found:
+        print(f"Several categories match {text!r}. Run again with one of these ids:", file=sys.stderr)
+        for item in found:
+            print(f"  {item['category_id']}  {item['name']}", file=sys.stderr)
+        sys.exit(2)
+    print(f"No Coupang category matches {text!r}. Available:", file=sys.stderr)
+    for item in categories:
+        print(f"  {item['category_id']}  {item['name']}", file=sys.stderr)
+    print("To ask for another category: python3 scripts/hashscraper.py request category <URL or id> "
+          f"(urgent or complex: email {HELP_EMAIL}).", file=sys.stderr)
+    sys.exit(2)
+
+
+def cmd_coupang_top(args):
+    """Top N (default 30) of a Coupang category from the latest daily snapshot. 300 credits per category per snapshot;
+    fetching the same snapshot again is free. Uses daily free credits first; --use-credits only when the user asks."""
+    key = api_key()
+    try:
+        headers = accept_terms_headers(args)
+        category_id = resolve_category(key, args.category)
+        data = call("GET", f"/coupang/categories/{urllib.parse.quote(category_id)}/top", key,
+                    query={"limit": args.limit}, use_credits=args.use_credits, extra_headers=headers)["data"]
+    except ApiError as e:
+        if e.code == "TERMS_ACCEPTANCE_REQUIRED":
+            return ask_terms(e.details.get("terms") or {})
+        return explain(e)
+    rows = data.get("rows", [])
+    write_rows(rows, args.csv)
+    paid = {"daily_free": "daily free credits", "credits": "your own credits",
+            "none": "already fetched this snapshot, no charge"}.get(data.get("charged_from"), data.get("charged_from"))
+    summary = (f"{data['category']['name']} ({data['category']['category_id']}) · snapshot {data.get('snapshot_date')} "
+               f"(collected once a day) · {len(rows)} rows · charged {data.get('charged_credits', 0)} credits ({paid})")
+    free = data.get("daily_free") or {}
+    if free:
+        summary += f" · daily free left {free.get('remaining')}"
+    print(summary, file=sys.stderr)
+    print_terms(data.get("terms"))
+    print(FOOTER, file=sys.stderr)
+    return 0
+
+
+def print_request(item):
+    """One data request as a single readable line."""
+    target = (item.get("category_id") and f"Coupang category {item['category_id']}") or \
+        f"{item.get('site_name') or ''} {item.get('url') or ''}".strip()
+    line = f"#{item['id']}  {item['status']}  {target}  (asked {item.get('created_at', '')[:10]})"
+    if item.get("reject_reason"):
+        line += f"  reason: {item['reject_reason']}"
+    print(line)
+
+
+def cmd_request(args):
+    """Ask HashScraper to add a Coupang category or a new shopping site. Free. Nothing is collected from the site when you ask;
+    an administrator reviews the request and the user gets an email with the decision."""
+    key = api_key()
+    body = {"kind": "coupang_category" if args.kind == "category" else "site"}
+    if args.kind == "category":
+        body["category"] = args.target
+    else:
+        if not args.name:
+            sys.exit("request site needs --name <site name> (and --note with the data you want).")
+        body["url"] = args.target
+        body["site_name"] = args.name
+    if args.note:
+        body["note"] = args.note
+    try:
+        data = call("POST", "/data_requests", key, body=body)
+    except ApiError as e:
+        return explain(e)
+    item = data.get("data") or {}
+    if item.get("already_available"):
+        category = item.get("category") or {}
+        print(f"Already available: {category.get('name')} ({category.get('category_id')}). "
+              f"Run: python3 scripts/hashscraper.py coupang-top {category.get('category_id')}", file=sys.stderr)
+        return 0
+    if item.get("duplicate"):
+        print("You already asked for this. Current state:", file=sys.stderr)
+    else:
+        print("Request received (free). An administrator reviews it and the account email gets the decision.", file=sys.stderr)
+    print_request(item)
+    print(f"Check later: python3 scripts/hashscraper.py requests  ·  urgent or complex: email {HELP_EMAIL}", file=sys.stderr)
+    return 0
+
+
+def cmd_requests(args):
+    """My data requests, newest first, with their status."""
+    key = api_key()
+    try:
+        items = call("GET", "/data_requests", key).get("data", [])
+    except ApiError as e:
+        return explain(e)
+    if args.json:
+        print(json.dumps(items, ensure_ascii=False, indent=2))
+    else:
+        for item in items:
+            print_request(item)
+    print(f"{len(items)} requests. pending = waiting for review, approved = accepted, done = ready, rejected = not accepted.",
+          file=sys.stderr)
+    return 0
+
+
+ACCEPT_TERMS_HELP = ("the data terms version the user was shown and agreed to (e.g. v0.2; asked once per account, "
+                     "before the first command that uses credits) — only after the user says so")
 
 
 def main():
@@ -503,6 +688,7 @@ def main():
     p_run.add_argument("--use-credits", action="store_true", help="continue with your own credits after the daily free credits")
     p_run.add_argument("--csv", help="write rows to this CSV file instead of JSON lines")
     p_run.add_argument("--max-wait", type=int, default=MAX_WAIT_SECONDS, help="seconds to wait for the collection (default 1200)")
+    p_run.add_argument("--accept-terms", metavar="VERSION", help=ACCEPT_TERMS_HELP)
     p_run.set_defaults(func=cmd_run)
 
     p_fetch = sub.add_parser("fetch", help="get the rows of an earlier run by dataset id")
@@ -510,6 +696,29 @@ def main():
     p_fetch.add_argument("--csv", help="write rows to this CSV file instead of JSON lines")
     p_fetch.add_argument("--max-wait", type=int, default=MAX_WAIT_SECONDS, help="seconds to wait if it is still collecting")
     p_fetch.set_defaults(func=cmd_fetch)
+
+    p_cats = sub.add_parser("coupang-categories", help="Coupang categories with a ready daily top 30 (free to list)")
+    p_cats.add_argument("--json", action="store_true", help="print the raw list")
+    p_cats.set_defaults(func=cmd_coupang_categories)
+
+    p_top = sub.add_parser("coupang-top", help="top 30 of a Coupang category with detail columns (300 credits per snapshot)")
+    p_top.add_argument("category", help="category id (e.g. 429888) or name (e.g. 커피믹스)")
+    p_top.add_argument("--limit", type=int, default=30, help="rows 1-30 (default 30; the price is the same)")
+    p_top.add_argument("--csv", help="write rows to this CSV file instead of JSON lines")
+    p_top.add_argument("--use-credits", action="store_true", help="use your own credits when the daily free credits are not enough")
+    p_top.add_argument("--accept-terms", metavar="VERSION", help=ACCEPT_TERMS_HELP)
+    p_top.set_defaults(func=cmd_coupang_top)
+
+    p_request = sub.add_parser("request", help="ask HashScraper to add a Coupang category or a new shopping site (free)")
+    p_request.add_argument("kind", choices=["category", "site"], help="category = a Coupang category, site = a new shopping site")
+    p_request.add_argument("target", help="category: Coupang category URL or numeric id · site: the site's URL (http/https)")
+    p_request.add_argument("--name", help="site name (required for site)")
+    p_request.add_argument("--note", help="the data you want, how much and how often (up to 2000 characters)")
+    p_request.set_defaults(func=cmd_request)
+
+    p_requests = sub.add_parser("requests", help="status of my data requests")
+    p_requests.add_argument("--json", action="store_true", help="print the raw list")
+    p_requests.set_defaults(func=cmd_requests)
 
     args = parser.parse_args()
     sys.exit(args.func(args))

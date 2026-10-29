@@ -1,7 +1,7 @@
 {
   "name": "hashscraper",
   "displayName": "HashScraper",
-  "version": "0.4.0",
+  "version": "0.7.0",
   "description": "Collect public web data from Korean and global sites (Coupang, Naver, Instagram, YouTube, Olive Young, Musinsa, maps, reviews, communities) as clean rows, using HashScraper's ready-made bots.",
   "author": {
     "name": "HashScraper",
