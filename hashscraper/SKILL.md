@@ -1,6 +1,6 @@
 ---
 name: hashscraper
-description: Collect public web data from Korean and global sites — Coupang product prices, Naver blog/cafe/news posts, Instagram and YouTube posts, Olive Young/Musinsa/Kurly products and reviews, Google/Naver/Kakao map places and reviews, community posts (DCinside, FM Korea, Clien …) and more — as clean rows, using HashScraper's ready-made bots through its API. Use when the user asks for prices, product details, reviews, posts or search results from these sites, wants a list of links turned into data rows, or wants the daily top 30 ranking of a Coupang category (with product details). Needs a free HashScraper account — connect it once with `login` (browser approval). Every day includes free credits. 쿠팡 가격·네이버 블로그·카페·뉴스·인스타그램·리뷰·지도 데이터 수집. Also called Hash Skill, Hash Agent, Crawling Skill, Crawling Agent, Scraping Skill or Scraping Agent (해시 스킬·해시 에이전트·크롤링 스킬·크롤링 에이전트·스크래핑 스킬·스크래핑 에이전트).
+description: Collect public web data from Korean and global sites — Coupang product prices, Naver blog/cafe/news posts, Instagram and YouTube posts, Olive Young/Musinsa/Kurly products and reviews, Google/Naver/Kakao map places and reviews, community posts (DCinside, FM Korea, Clien …) and more — as clean rows, using HashScraper's ready-made bots through its API. Use when the user asks for prices, product details, reviews, posts or search results from these sites, wants a list of links turned into data rows, or wants the daily top 30 ranking of a Coupang category (with product details) or a Naver Shopping category. Needs a free HashScraper account — connect it once with `login` (browser approval). Every day includes free credits. 쿠팡 가격·네이버 블로그·카페·뉴스·인스타그램·리뷰·지도 데이터 수집. Also called Hash Skill, Hash Agent, Crawling Skill, Crawling Agent, Scraping Skill or Scraping Agent (해시 스킬·해시 에이전트·크롤링 스킬·크롤링 에이전트·스크래핑 스킬·스크래핑 에이전트).
 license: MIT
 metadata:
   author: HashScraper
@@ -47,8 +47,8 @@ export HASHSCRAPER_API_KEY="your key"
 ## Data terms — the user agrees once, before the first command that uses credits
 
 - **Terms**: the data is for the user's internal analysis only — no resale or redistribution. Tell the user once, with the link: https://www.hashscraper.com/data-terms
-- **Agreement**: the first time a command that uses credits (`run`, `coupang-top`) is sent, the script stops with exit code 3 and prints the terms (`TERMS_ACCEPTANCE_REQUIRED` — nothing collected, nothing charged). Show the terms text and link to the user as printed and ask whether they agree. Only after the user clearly says they agree, run the same command again with `--accept-terms <version>` — the version printed with the terms (e.g. `--accept-terms v0.2`).
-- **Never add `--accept-terms` on your own** and never agree for the user. It is asked once per account and covers every command (agreeing in `run` also covers `coupang-top`, and the other way round). It is asked again only when the terms change — if the server asks again with a new version, show the new terms again.
+- **Agreement**: the first time a command that uses credits (`run`, `coupang-top`, `naver-top`) is sent, the script stops with exit code 3 and prints the terms (`TERMS_ACCEPTANCE_REQUIRED` — nothing collected, nothing charged). Show the terms text and link to the user as printed and ask whether they agree. Only after the user clearly says they agree, run the same command again with `--accept-terms <version>` — the version printed with the terms (e.g. `--accept-terms v0.2`).
+- **Never add `--accept-terms` on your own** and never agree for the user. It is asked once per account and covers every command (agreeing in `run` also covers `coupang-top` and `naver-top`, and the other way round). It is asked again only when the terms change — if the server asks again with a new version, show the new terms again.
 
 ## Run
 
@@ -104,6 +104,22 @@ Do not send the email for the user — give them the address and what to write. 
 - If the bot you pick has `fail_rate_7d` of 0.3 or more, tell the user before running that this site sometimes fails and a retry later may be needed.
 - If a run ends with status `failed` (or 0 rows), say so plainly. You may try once more; do not loop.
 
+## Bots made by members
+
+Besides `catalog.json`, HashScraper members publish their own bots. When the user is connected, `python3 scripts/hashscraper.py catalog --search <text>` also lists them live under "Bots made by HashScraper members" (slug, site, inputs, credits per row, creator); with `--json` the output is `{"bots": [...], "community": [...]}`. They are not in `catalog.json`. Run one with `python3 scripts/hashscraper.py run --public-bot <slug> --input "<input name or key>=value"` — use `--public-bot` *instead of* the worker name, never both. The bot is added to the user's account, runs at the price shown (credits per row, charged to the user who runs it; the daily free credits are used first, as for other bots), and the terms, free-credit and `--use-credits` rules above apply unchanged. If it says the slug was not found, the bot was unpublished or hidden (or the slug is misspelled): run `catalog` again. If the list is missing, the feature is off or the user is not connected — carry on with the built-in bots.
+
+## Naver Shopping category top 30
+
+```bash
+python3 scripts/hashscraper.py naver-categories                     # categories you can get (with the parent path), with the latest date
+python3 scripts/hashscraper.py naver-top 커피 --csv top30.csv          # or the id: naver-top 50001081
+```
+
+- Use it when the user wants the best sellers of a Naver Shopping category (Naver Plus Store best ranking, most purchased, daily). Categories are 3rd-level categories such as `식품 > 음료 > 커피`. Each row is one ranked product (rank, product name, store, price, discount, delivery, rating, reviews …); `순위기준일` is the day Naver made the ranking.
+- Collected **once a day** in the morning and reused — today's once this morning's collection is finished, otherwise yesterday's. Nothing is collected when you ask.
+- Same price and rules as the Coupang top 30: **300 credits per category per day** (daily free credits first), the same day again costs nothing, `--use-credits` only if the user asks, and the same data terms.
+- The category is not in `naver-categories`? Ask the user, then run `python3 scripts/hashscraper.py request naver-category <Naver best page URL or id> --note "<what you need>"` (free, reviewed by an administrator). Urgent or complex? Email help@hashscraper.com instead.
+
 ## Errors
 
 Show the message to the user as is. Do not retry these in a loop:
@@ -115,9 +131,9 @@ Show the message to the user as is. Do not retry these in a loop:
 | `INVALID_API_KEY` / `MISSING_API_KEY` | Key missing, turned off or expired | Run `login` again (or check `HASHSCRAPER_API_KEY` if it is set) |
 | `BOT_MAINTENANCE` | The bot is being fixed | Try another bot or later |
 | `RATE_LIMITED` | Too many requests (or 5 data requests today) | Wait a minute; data requests reset at midnight KST |
-| `CATEGORY_NOT_AVAILABLE` | That Coupang category has no daily top 30 | Show `coupang-categories`; for another category, offer `request category` (urgent or complex: email help@hashscraper.com) |
+| `CATEGORY_NOT_AVAILABLE` | That Coupang or Naver Shopping category has no daily top 30 | Show `coupang-categories` (or `naver-categories`); for another category, offer `request category` (or `request naver-category`) (urgent or complex: email help@hashscraper.com) |
 | `DATA_NOT_READY` | No finished daily snapshot in the last 3 days (no credits used) | Try again later |
-| `TERMS_ACCEPTANCE_REQUIRED` | The first command that uses credits (`run`, `coupang-top`) needs the user's agreement to the data terms (nothing collected, no credits used) | Show the terms to the user; only after they agree, re-run with `--accept-terms <version>` |
+| `TERMS_ACCEPTANCE_REQUIRED` | The first command that uses credits (`run`, `coupang-top`, `naver-top`) needs the user's agreement to the data terms (nothing collected, no credits used) | Show the terms to the user; only after they agree, re-run with `--accept-terms <version>` |
 
 ## Notes for the agent
 
@@ -136,8 +152,10 @@ HashScraper(해시스크래퍼)의 수집 봇 120여 개(쿠팡·네이버 블�
 - **연결**: `python3 scripts/hashscraper.py login --start` → 나온 주소·코드를 사용자에게 바로 보여 주고 `login --wait` (사람이 보는 터미널이면 `login` 하나로 됩니다) → 사용자가 주소를 열어 로그인(없으면 구글·이메일로 무료 가입) → **허락하고 연결**. 키는 `~/.config/hashscraper/credentials`(본인만 읽기)에 저장되고 화면에 찍히지 않습니다. 코드는 10분 뒤 만료, 키는 90일 뒤 만료(그때 다시 `login`). 마이페이지 → API·연동에서 이 키만 따로 끌 수 있습니다. `logout` 은 저장한 키를 지웁니다. 키를 바꾸고 싶으면 `rotate` — 새 키를 받아 저장하고 서버의 옛 키는 바로 지웁니다(`login` 으로 받은 키만, 환경변수·마이페이지 키는 마이페이지에서).
 - **다른 방법**: 마이페이지 → API 에서 키를 복사해 환경변수 `HASHSCRAPER_API_KEY` 에 넣으면 그 키를 먼저 씁니다. 키를 채팅·파일에 붙여 넣지 않습니다.
 - **비용**: 매일 무료 크레딧이 채워집니다(한국 시각 자정, 이월 없음). 이 skill 은 기본으로 **무료 크레딧만** 씁니다. 다 쓰면 수집을 멈추고 "내일 다시 채워져요"를 알려 줍니다. 내 크레딧으로 이어 쓰려면 사용자가 원할 때만 `--use-credits` 를 붙입니다.
-- **데이터 이용약관 — 크레딧을 쓰는 명령 처음 한 번 동의**: 데이터는 내부 분석 용도로만 쓸 수 있어요(재배포 금지) — https://www.hashscraper.com/data-terms . 크레딧을 쓰는 명령(`run`·`coupang-top`)을 처음 보내면 스크립트가 약관 문구·주소를 찍고 종료 코드 3 으로 멈춥니다(수집·차감 없음). 그 문구와 주소를 사용자에게 그대로 보여 주고, 사용자가 분명히 "동의"한 뒤에만 같은 명령에 `--accept-terms <약관 버전>`(함께 찍힌 버전, 예: `--accept-terms v0.2`)을 붙여 다시 실행합니다. 에이전트가 스스로 `--accept-terms` 를 붙이거나 대신 동의하지 않습니다. 계정마다 한 번이고 모든 명령에 같이 적용됩니다(`run` 에서 동의하면 `coupang-top` 은 다시 묻지 않고, 그 반대도 같습니다). 약관이 바뀌면 새 버전으로 다시 묻습니다 — 새 약관을 다시 보여 줍니다.
+- **데이터 이용약관 — 크레딧을 쓰는 명령 처음 한 번 동의**: 데이터는 내부 분석 용도로만 쓸 수 있어요(재배포 금지) — https://www.hashscraper.com/data-terms . 크레딧을 쓰는 명령(`run`·`coupang-top`·`naver-top`)을 처음 보내면 스크립트가 약관 문구·주소를 찍고 종료 코드 3 으로 멈춥니다(수집·차감 없음). 그 문구와 주소를 사용자에게 그대로 보여 주고, 사용자가 분명히 "동의"한 뒤에만 같은 명령에 `--accept-terms <약관 버전>`(함께 찍힌 버전, 예: `--accept-terms v0.2`)을 붙여 다시 실행합니다. 에이전트가 스스로 `--accept-terms` 를 붙이거나 대신 동의하지 않습니다. 계정마다 한 번이고 모든 명령에 같이 적용됩니다(`run` 에서 동의하면 `coupang-top`·`naver-top` 은 다시 묻지 않고, 그 반대도 같습니다). 약관이 바뀌면 새 버전으로 다시 묻습니다 — 새 약관을 다시 보여 줍니다.
+- **회원이 만든 봇**: 회원이 공개한 봇은 `catalog.json` 에 없고, 연결된 상태에서 `catalog` 를 부르면 "Bots made by HashScraper members" 로 실시간 목록이 덧붙습니다(`--json` 은 `{"bots", "community"}`). `run --public-bot <슬러그> --input "<입력 이름>=값"` 으로 실행합니다(워커 이름과 함께 쓰지 않습니다). 내 계정에 가져와 보이는 단가(행당 크레딧)로 수집되고, 쓰는 사람의 크레딧이 나가며 매일 무료 크레딧을 먼저 씁니다. 약관·무료·`--use-credits` 규칙은 같습니다.
 - **쿠팡 카테고리 top30(상세 포함)**: `coupang-categories` 로 받을 수 있는 카테고리를 보고 `coupang-top <카테고리ID 또는 이름>` 으로 랭킹 1–30 행(목록 칸 + 상세 페이지 칸)을 받습니다. 데이터는 **하루 한 번 모은 것**(보통 전날, 당일 아침 수집이 끝나면 당일)을 다시 씁니다. 한 번 받기에 **300 크레딧**(매일 무료 먼저), 같은 카테고리·같은 날짜를 다시 받으면 차감하지 않습니다. 같은 데이터 이용약관이 적용됩니다(위 "데이터 이용약관" — 아직 동의하지 않았으면 처음 차감 전에 묻습니다). 이름이 여러 카테고리에 맞으면 후보를 보여 주고 멈춥니다. 원하는 카테고리가 없으면 사용자에게 물어본 뒤 `request category <쿠팡 카테고리 URL 또는 ID> --note "<필요한 것>"` 으로 요청합니다(무료, 하루 5건, 접수만 하고 아직 수집하지 않습니다 — 관리자가 검토하고 결정은 계정 이메일로 갑니다. 이미 받을 수 있는 카테고리면 그렇게 알려 주고 요청을 만들지 않습니다). `requests` 로 내 요청의 상태를 봅니다. 급하거나 복잡하면 help@hashscraper.com 으로 메일을 보내 달라고 안내합니다.
+- **네이버쇼핑 카테고리 top30**: `naver-categories` 로 받을 수 있는 3단계 카테고리(상위 경로 포함, 예: `식품 > 음료 > 커피`)를 보고 `naver-top <카테고리ID 또는 이름>` 으로 순위 1–30 행(상품명·스토어·가격·할인·배송·평점·리뷰 수 등)을 받습니다. 네이버 플러스스토어 베스트(많이 구매한 상품·일간)를 **하루 한 번 아침에 모은 것**을 다시 씁니다(당일 수집이 끝나면 당일, 그 전이면 전날). `순위기준일` 칸은 네이버가 순위를 낸 날입니다. 값·규칙은 쿠팡 top30 과 같습니다 — 한 번 받기에 **300 크레딧**(매일 무료 먼저), 같은 카테고리·같은 날짜를 다시 받으면 차감하지 않고, 같은 데이터 이용약관이 적용됩니다. 원하는 카테고리가 없으면 사용자에게 물어본 뒤 `request naver-category <네이버 베스트 주소 또는 ID> --note "<필요한 것>"` 으로 요청합니다(무료, 관리자 검토).
 - **수집할 수 없을 때**: 맞는 봇이 `catalog.json` 에 없으면 사용자의 OK 를 받아 먼저 `request site <URL> --name <이름> --note <원하는 데이터·양·주기>` 로 요청합니다(무료, 관리자 검토 뒤 결과를 이메일로 알립니다). 급하거나 복잡하거나, 같은 봇이 두 번 실패하거나, 로그인이 필요한 페이지면 사용자에게 help@hashscraper.com 으로 "사이트·원하는 데이터·양·주기"를 적어 메일을 보내 달라고 안내합니다(에이전트가 대신 보내지 않습니다).
 - **예시 질문**: "이 쿠팡 상품 지금 가격 알려줘", "'성수동 카페' 네이버 블로그 글 50개 모아줘", "이 올리브영 상품 5점 리뷰만 모아줘", "강남역 치과 카카오맵 목록 뽑아줘".
 - 매일 자동으로 모으거나 대량 수집이 필요하면 → 상담: https://www.hashscraper.com/quotes/new?utm_source=agent_skill&utm_medium=skill&utm_campaign=bundle

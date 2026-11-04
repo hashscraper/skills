@@ -6,10 +6,14 @@
   python3 hashscraper.py me                                  # today's free credits
   python3 hashscraper.py run DemoCoupangDetailWorker --input param1="https://www.coupang.com/vp/products/..."
   python3 hashscraper.py run DynNaverBlogWorker --input param1="성수동 카페" --input param5=50 --csv out.csv
+  python3 hashscraper.py run --public-bot shopprice1 --input "검색어=샴푸"   # a bot made by a member (slug from `catalog`)
   python3 hashscraper.py fetch 270261461                     # rows of an earlier run (waits while it is still collecting)
   python3 hashscraper.py coupang-categories                  # Coupang categories with a ready daily top 30
   python3 hashscraper.py coupang-top 커피믹스 --csv top30.csv  # top 30 of a category (with detail columns), 300 credits
+  python3 hashscraper.py naver-categories                    # Naver Shopping categories with a ready daily top 30
+  python3 hashscraper.py naver-top 커피 --csv top30.csv        # top 30 of a Naver Shopping category, 300 credits
   python3 hashscraper.py request category <URL|ID> [--note ...]   # ask HashScraper to add a Coupang category (free)
+  python3 hashscraper.py request naver-category <URL|ID> [--note ...]   # ask for a Naver Shopping category (free)
   python3 hashscraper.py request site <URL> --name <name> --note <data you want>   # ask for a new shopping site (free)
   python3 hashscraper.py requests                            # status of my requests
 
@@ -18,8 +22,10 @@ The key from `login` is saved in ~/.config/hashscraper/credentials (owner-only).
 `logout` deletes the saved key. `rotate` swaps the saved key for a new one and deletes the old key on the server.
 """
 import argparse
+import contextlib
 import csv
 import http.client
+import io
 import json
 import os
 import sys
@@ -36,7 +42,7 @@ BASE = os.environ.get("HASHSCRAPER_BASE_URL", "https://www.hashscraper.com/v5/ap
 SITE = "https://www.hashscraper.com"
 UTM = "utm_source=agent_skill&utm_medium=skill&utm_campaign=bundle"
 SIGN_UP = f"{SITE}/users/sign_up?{UTM}"
-BOT_CATALOG = f"{SITE}/schedules/catalog?{UTM}"
+BOT_CATALOG = f"{SITE}/bots?{UTM}"
 FOOTER = f"Daily monitoring & bulk collection -> HashScraper {SITE}/quotes/new?{UTM}"
 CATALOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "catalog.json")
 POLL_SECONDS = 15
@@ -163,8 +169,9 @@ def catalog_entry(worker):
     return None
 
 
-def explain(error):
-    """Print an API error for the user. Limit errors are final for this run — never retried."""
+def explain(error, shop="coupang"):
+    """Print an API error for the user. Limit errors are final for this run — never retried.
+    shop: which category list to point at for CATEGORY_NOT_AVAILABLE (coupang or naver)."""
     lines = [f"HashScraper API error — {error.code}: {error.message}"]
     details = error.details
     if error.code == "DAILY_FREE_USED_UP":
@@ -185,8 +192,9 @@ def explain(error):
     elif error.code == "CATEGORY_NOT_AVAILABLE":
         if details.get("available"):
             lines.append("Available categories: " + ", ".join(details["available"])
-                         + " (see: python3 scripts/hashscraper.py coupang-categories)")
-        lines.append("To ask for another category: python3 scripts/hashscraper.py request category <URL or id> "
+                         + f" (see: python3 scripts/hashscraper.py {shop}-categories)")
+        request_kind = "naver-category" if shop == "naver" else "category"
+        lines.append(f"To ask for another category: python3 scripts/hashscraper.py request {request_kind} <URL or id> "
                      f"(urgent or complex: email {HELP_EMAIL}).")
     elif error.code == "DATA_NOT_READY":
         lines.append("No credits were used. The daily snapshot is not finished yet — try again later.")
@@ -323,19 +331,55 @@ def cmd_rotate(args):
     return 0
 
 
+def quiet_key():
+    """The key from the environment or `login`, or None — never exits, never prints (for optional lookups)."""
+    key = os.environ.get("HASHSCRAPER_API_KEY", "").strip()
+    if key:
+        return key
+    with contextlib.redirect_stderr(io.StringIO()):
+        return saved_key()
+
+
+def community_bots(search=None, limit=20):
+    """Bots made by members, searched live. None = no key; [] = none found, the feature is off (404) or the server is unreachable."""
+    key = quiet_key()
+    if not key:
+        return None
+    query = {"limit": limit}
+    if search:
+        query["search"] = search
+    try:
+        return call("GET", "/community_bots", key, query=query).get("data") or []
+    except (ApiError, urllib.error.URLError, OSError, ValueError):
+        return []
+
+
 def cmd_catalog(args):
     bots = load_catalog()["bots"]
     if args.search:
         needle = args.search.lower()
         bots = [b for b in bots if needle in json.dumps(b, ensure_ascii=False).lower()]
+    community = community_bots(args.search)
     if args.json:
-        print(json.dumps(bots, ensure_ascii=False, indent=2))
+        print(json.dumps({"bots": bots, "community": community or []}, ensure_ascii=False, indent=2))
         return 0
     for bot in bots:
         inputs = ", ".join(f"{i['key']}={i.get('name_en') or i['name']}" for i in bot["inputs"])
         print(f"{bot['worker']}  [{bot.get('site_en') or bot.get('site')}] {bot['name']}  "
               f"{bot['credits_per_row']:g} credits/row\n    {bot.get('summary') or ''}\n    inputs: {inputs}")
     print(f"{len(bots)} bots", file=sys.stderr)
+    if community is None:
+        print("Run `login` to also search bots made by members.", file=sys.stderr)
+    elif community:
+        print("\nBots made by HashScraper members (live) — run with: run --public-bot <slug> "
+              "(credits per row are charged to you; daily free credits are used first, as for other bots)")
+        for bot in community:
+            inputs = ", ".join(f"{i.get('key') or i.get('param')}={i.get('name')}"
+                               + (f" (e.g. {i['example']!r})" if i.get("example") else "") for i in bot.get("inputs") or [])
+            by = f" · by {bot['creator']['nickname']}" if (bot.get("creator") or {}).get("nickname") else ""
+            print(f"{bot['slug']}  [{bot.get('site') or '-'}] {bot['title']}  {bot['credits_per_row']:g} credits/row{by}\n"
+                  f"    {bot.get('summary') or ''}\n    inputs: {inputs}\n    run with --public-bot {bot['slug']}")
+        print(f"{len(community)} member bots", file=sys.stderr)
     return 0
 
 
@@ -382,6 +426,40 @@ def import_bot(key, worker):
     return added["id"]
 
 
+def import_public_bot(key, slug):
+    """Add a member-made bot (by slug) to the account — 200 for an existing copy, 201 for a new one. Returns its id."""
+    try:
+        added = call("POST", "/bots/import", key, body={"public_bot": slug})["data"]
+    except ApiError as e:
+        if e.code == "BOT_NOT_FOUND":
+            sys.exit(f"No member bot {slug!r} was found (nothing was collected or charged). It may have been unpublished or "
+                     "hidden, or the slug is misspelled. Run `catalog` again to find the current slug.")
+        raise
+    if added.get("created"):
+        print(f"Added {added.get('name') or slug} to your account.", file=sys.stderr)
+    return added["id"]
+
+
+def parse_public_inputs(key, bot_id, pairs):
+    """--input "<name or alias>=value" -> {"param1": "value"} using the bot's own input list (unknown names pass through)."""
+    names = {}
+    try:
+        definitions = call("GET", f"/bots/{bot_id}/inputs", key)["data"].get("inputs") or []
+    except (ApiError, urllib.error.URLError, OSError, ValueError, KeyError):
+        definitions = []
+    for item in definitions:
+        for label in (item.get("key"), item.get("alias"), item.get("name"), item.get("name_en")):
+            if label:
+                names[str(label).strip().lower()] = item["key"]
+    inputs = {}
+    for pair in pairs or []:
+        if "=" not in pair:
+            sys.exit(f"--input needs name=value (got {pair!r})")
+        name, value = pair.split("=", 1)
+        inputs[names.get(name.strip().lower()) or name.strip()] = value
+    return inputs
+
+
 def parse_inputs(pairs, entry):
     """--input param1=value or --input "<input name>=value" -> {"param1": "value"}"""
     names = {}
@@ -415,11 +493,14 @@ def fetch_rows(key, dataset_id):
 
 
 def cmd_run(args):
+    if bool(args.worker) == bool(args.public_bot):
+        sys.exit("Pass exactly one of: a worker name from the catalog, or --public-bot <slug> (a bot made by a member, "
+                 "from `catalog`). Nothing was collected or charged.")
     key = api_key()
-    entry = catalog_entry(args.worker)
-    if entry is None:
+    entry = catalog_entry(args.worker) if args.worker else None
+    if args.worker and entry is None:
         print(f"{args.worker} is not in this bundle's catalog. Trying it anyway.", file=sys.stderr)
-    inputs = parse_inputs(args.input, entry)
+    inputs = parse_inputs(args.input, entry) if args.worker else {}
     try:
         me = call("GET", "/me", key)["data"]
         free = me.get("daily_free")
@@ -429,7 +510,11 @@ def cmd_run(args):
         if free is not None:
             print(f"daily free credits left today: {free.get('remaining')} / {free.get('amount')}", file=sys.stderr)
 
-        bot_id = find_bot(key, args.worker) or (import_bot(key, args.worker) if entry else None)
+        if args.public_bot:
+            bot_id = import_public_bot(key, args.public_bot)
+            inputs = parse_public_inputs(key, bot_id, args.input)
+        else:
+            bot_id = find_bot(key, args.worker) or (import_bot(key, args.worker) if entry else None)
         if not bot_id:
             sys.exit(f"Your account has no bot for {args.worker}. Add it from the bot catalog ({BOT_CATALOG}), then run again. "
                      + HELP_HINT)
@@ -439,7 +524,7 @@ def cmd_run(args):
                        idempotency_key=str(uuid.uuid4()), use_credits=args.use_credits,
                        extra_headers=accept_terms_headers(args))
         dataset_id = started["data"]["id"]
-        print(f"collecting with {args.worker} (dataset {dataset_id})...", file=sys.stderr)
+        print(f"collecting with {args.worker or 'public bot ' + args.public_bot} (dataset {dataset_id})...", file=sys.stderr)
         return finish(key, dataset_id, args)
     except ApiError as e:
         if e.code == "TERMS_ACCEPTANCE_REQUIRED":
@@ -511,7 +596,7 @@ def accept_terms_headers(args):
 
 
 def ask_terms(terms):
-    """The first command that uses credits (run, coupang-top) needs the user's agreement to the data terms, once per account.
+    """The first command that uses credits (run, coupang-top, naver-top) needs the user's agreement to the data terms, once per account.
     Nothing was collected or charged. Exit code 3."""
     print("Before the first command that uses credits, the user must agree to the HashScraper data terms "
           "(nothing was collected or charged):\n"
@@ -541,49 +626,92 @@ def cmd_coupang_categories(args):
     return 0
 
 
-def resolve_category(key, wanted, categories=None):
-    """A category id as is, or a name looked up in coupang-categories (one match only)."""
+# Coupang and Naver Shopping category top 30 — same rules, different list path and request kind
+SHOPS = {
+    "coupang": {"label": "Coupang", "path": "/coupang/categories", "request": "category"},
+    "naver": {"label": "Naver Shopping", "path": "/naver/categories", "request": "naver-category"},
+}
+
+
+def category_label(item):
+    """Name, with the parent path for Naver Shopping (e.g. 식품 > 음료 > 커피)."""
+    return item.get("path") or item["name"]
+
+
+def resolve_category(key, wanted, categories=None, shop="coupang"):
+    """A category id as is, or a name looked up in the category list (one match only)."""
+    info = SHOPS[shop]
     text = wanted.strip()
     if text.isdigit():
         return text
     if categories is None:
-        categories = call("GET", "/coupang/categories", key).get("data", [])
+        categories = call("GET", info["path"], key).get("data", [])
     needle = text.casefold()
     exact = [c for c in categories if c["name"].casefold() == needle]
-    found = exact or [c for c in categories if needle in c["name"].casefold()]
+    found = exact or [c for c in categories if needle in category_label(c).casefold()]
     if len(found) == 1:
         return found[0]["category_id"]
     if found:
         print(f"Several categories match {text!r}. Run again with one of these ids:", file=sys.stderr)
         for item in found:
-            print(f"  {item['category_id']}  {item['name']}", file=sys.stderr)
+            print(f"  {item['category_id']}  {category_label(item)}", file=sys.stderr)
         sys.exit(2)
-    print(f"No Coupang category matches {text!r}. Available:", file=sys.stderr)
+    print(f"No {info['label']} category matches {text!r}. Available:", file=sys.stderr)
     for item in categories:
-        print(f"  {item['category_id']}  {item['name']}", file=sys.stderr)
-    print("To ask for another category: python3 scripts/hashscraper.py request category <URL or id> "
+        print(f"  {item['category_id']}  {category_label(item)}", file=sys.stderr)
+    print(f"To ask for another category: python3 scripts/hashscraper.py request {info['request']} <URL or id> "
           f"(urgent or complex: email {HELP_EMAIL}).", file=sys.stderr)
     sys.exit(2)
+
+
+def cmd_naver_categories(args):
+    """Naver Shopping categories (3rd level, with the parent path) whose daily top 30 is ready. Listing is free."""
+    key = api_key()
+    try:
+        page = call("GET", SHOPS["naver"]["path"], key)
+    except ApiError as e:
+        return explain(e)
+    categories = page.get("data", [])
+    if args.json:
+        print(json.dumps(categories, ensure_ascii=False, indent=2))
+    else:
+        for item in categories:
+            print(f"{item['category_id']}  {category_label(item)}  latest {item.get('latest_date') or 'not ready'}  "
+                  f"{item.get('price_credits')} credits per fetch")
+    print(f"{len(categories)} categories. Not in the list? python3 scripts/hashscraper.py request naver-category <URL or id> "
+          f"(free). Urgent or complex: email {HELP_EMAIL}.", file=sys.stderr)
+    print_terms(page.get("terms"))
+    return 0
 
 
 def cmd_coupang_top(args):
     """Top N (default 30) of a Coupang category from the latest daily snapshot. 300 credits per category per snapshot;
     fetching the same snapshot again is free. Uses daily free credits first; --use-credits only when the user asks."""
+    return category_top(args, "coupang")
+
+
+def cmd_naver_top(args):
+    """Top N (default 30) of a Naver Shopping category from the latest finished daily ranking. 300 credits per category per day;
+    fetching the same day again is free. Uses daily free credits first; --use-credits only when the user asks."""
+    return category_top(args, "naver")
+
+
+def category_top(args, shop):
     key = api_key()
     try:
         headers = accept_terms_headers(args)
-        category_id = resolve_category(key, args.category)
-        data = call("GET", f"/coupang/categories/{urllib.parse.quote(category_id)}/top", key,
+        category_id = resolve_category(key, args.category, shop=shop)
+        data = call("GET", f"{SHOPS[shop]['path']}/{urllib.parse.quote(category_id)}/top", key,
                     query={"limit": args.limit}, use_credits=args.use_credits, extra_headers=headers)["data"]
     except ApiError as e:
         if e.code == "TERMS_ACCEPTANCE_REQUIRED":
             return ask_terms(e.details.get("terms") or {})
-        return explain(e)
+        return explain(e, shop)
     rows = data.get("rows", [])
     write_rows(rows, args.csv)
     paid = {"daily_free": "daily free credits", "credits": "your own credits",
             "none": "already fetched this snapshot, no charge"}.get(data.get("charged_from"), data.get("charged_from"))
-    summary = (f"{data['category']['name']} ({data['category']['category_id']}) · snapshot {data.get('snapshot_date')} "
+    summary = (f"{category_label(data['category'])} ({data['category']['category_id']}) · snapshot {data.get('snapshot_date')} "
                f"(collected once a day) · {len(rows)} rows · charged {data.get('charged_credits', 0)} credits ({paid})")
     free = data.get("daily_free") or {}
     if free:
@@ -596,7 +724,8 @@ def cmd_coupang_top(args):
 
 def print_request(item):
     """One data request as a single readable line."""
-    target = (item.get("category_id") and f"Coupang category {item['category_id']}") or \
+    shop = "Naver Shopping" if item.get("kind") == "naver_category" else "Coupang"
+    target = (item.get("category_id") and f"{shop} category {item['category_id']}") or \
         f"{item.get('site_name') or ''} {item.get('url') or ''}".strip()
     line = f"#{item['id']}  {item['status']}  {target}  (asked {item.get('created_at', '')[:10]})"
     if item.get("reject_reason"):
@@ -605,11 +734,11 @@ def print_request(item):
 
 
 def cmd_request(args):
-    """Ask HashScraper to add a Coupang category or a new shopping site. Free. Nothing is collected from the site when you ask;
-    an administrator reviews the request and the user gets an email with the decision."""
+    """Ask HashScraper to add a Coupang or Naver Shopping category or a new shopping site. Free. Nothing is collected from the site
+    when you ask; an administrator reviews the request and the user gets an email with the decision."""
     key = api_key()
-    body = {"kind": "coupang_category" if args.kind == "category" else "site"}
-    if args.kind == "category":
+    body = {"kind": {"category": "coupang_category", "naver-category": "naver_category"}.get(args.kind, "site")}
+    if args.kind in ("category", "naver-category"):
         body["category"] = args.target
     else:
         if not args.name:
@@ -625,8 +754,9 @@ def cmd_request(args):
     item = data.get("data") or {}
     if item.get("already_available"):
         category = item.get("category") or {}
+        command = "naver-top" if args.kind == "naver-category" else "coupang-top"
         print(f"Already available: {category.get('name')} ({category.get('category_id')}). "
-              f"Run: python3 scripts/hashscraper.py coupang-top {category.get('category_id')}", file=sys.stderr)
+              f"Run: python3 scripts/hashscraper.py {command} {category.get('category_id')}", file=sys.stderr)
         return 0
     if item.get("duplicate"):
         print("You already asked for this. Current state:", file=sys.stderr)
@@ -676,14 +806,15 @@ def main():
 
     p_catalog = sub.add_parser("catalog", help="list bots in this bundle")
     p_catalog.add_argument("--search", help="filter by text (site, name, worker)")
-    p_catalog.add_argument("--json", action="store_true", help="print the raw catalog entries")
+    p_catalog.add_argument("--json", action="store_true", help='print {"bots": [...], "community": [...]} (community = member bots, live; empty without a key)')
     p_catalog.set_defaults(func=cmd_catalog)
 
     p_me = sub.add_parser("me", help="show today's free credits")
     p_me.set_defaults(func=cmd_me)
 
     p_run = sub.add_parser("run", help="collect with one bot")
-    p_run.add_argument("worker", help="worker name from the catalog, e.g. DemoCoupangDetailWorker")
+    p_run.add_argument("worker", nargs="?", help="worker name from the catalog, e.g. DemoCoupangDetailWorker (or use --public-bot)")
+    p_run.add_argument("--public-bot", metavar="SLUG", help="slug of a bot made by a member (from `catalog`); use instead of the worker name")
     p_run.add_argument("--input", action="append", help="param1=value (or the input name); repeat for more inputs")
     p_run.add_argument("--use-credits", action="store_true", help="continue with your own credits after the daily free credits")
     p_run.add_argument("--csv", help="write rows to this CSV file instead of JSON lines")
@@ -709,9 +840,23 @@ def main():
     p_top.add_argument("--accept-terms", metavar="VERSION", help=ACCEPT_TERMS_HELP)
     p_top.set_defaults(func=cmd_coupang_top)
 
-    p_request = sub.add_parser("request", help="ask HashScraper to add a Coupang category or a new shopping site (free)")
-    p_request.add_argument("kind", choices=["category", "site"], help="category = a Coupang category, site = a new shopping site")
-    p_request.add_argument("target", help="category: Coupang category URL or numeric id · site: the site's URL (http/https)")
+    p_ncats = sub.add_parser("naver-categories", help="Naver Shopping categories with a ready daily top 30 (free to list)")
+    p_ncats.add_argument("--json", action="store_true", help="print the raw list")
+    p_ncats.set_defaults(func=cmd_naver_categories)
+
+    p_ntop = sub.add_parser("naver-top", help="top 30 of a Naver Shopping category (300 credits per day)")
+    p_ntop.add_argument("category", help="category id (e.g. 50001081) or name (e.g. 커피)")
+    p_ntop.add_argument("--limit", type=int, default=30, help="rows 1-30 (default 30; the price is the same)")
+    p_ntop.add_argument("--csv", help="write rows to this CSV file instead of JSON lines")
+    p_ntop.add_argument("--use-credits", action="store_true", help="use your own credits when the daily free credits are not enough")
+    p_ntop.add_argument("--accept-terms", metavar="VERSION", help=ACCEPT_TERMS_HELP)
+    p_ntop.set_defaults(func=cmd_naver_top)
+
+    p_request = sub.add_parser("request", help="ask HashScraper to add a Coupang or Naver Shopping category or a new shopping site (free)")
+    p_request.add_argument("kind", choices=["category", "naver-category", "site"],
+                           help="category = a Coupang category, naver-category = a Naver Shopping category, site = a new shopping site")
+    p_request.add_argument("target", help="category: Coupang category URL or numeric id · naver-category: Naver Shopping best page URL "
+                                          "or numeric id · site: the site's URL (http/https)")
     p_request.add_argument("--name", help="site name (required for site)")
     p_request.add_argument("--note", help="the data you want, how much and how often (up to 2000 characters)")
     p_request.set_defaults(func=cmd_request)
